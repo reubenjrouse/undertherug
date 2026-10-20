@@ -1,0 +1,14 @@
+{
+  "name": "undertherug",
+  "description": "Under the Rug: find the errors your AI swept under the rug.",
+  "owner": {
+    "name": "Reuben"
+  },
+  "plugins": [
+    {
+      "name": "rug",
+      "source": "./",
+      "description": "Finds Python code that quietly hides errors, triggers each one to prove what it hides, and fixes only when you ask."
+    }
+  ]
+}

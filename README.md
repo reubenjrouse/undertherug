@@ -6,7 +6,7 @@ A Claude Code plugin for Python. It finds the places where your code quietly hid
 errors, breaks each one on purpose to show what really happens, and tells you in plain
 English.
 
-> **Status:** early (v0.1.0), Python only.
+> **Status:** early, Python only.
 
 ## The problem: AI code doesn't crash, it lies
 
@@ -90,15 +90,20 @@ picture shouldn't crash the app). The plugin shows you what happens; you decide.
 
 ## Install
 
-There's no marketplace listing yet. Download this folder, then start Claude Code in your
-project with the plugin loaded:
+Inside Claude Code, run these two commands (one at a time):
 
-```bash
-cd path/to/your/python-project
-claude --plugin-dir path/to/undertherug
+```
+/plugin marketplace add reubenjrouse/undertherug
+/plugin install rug@undertherug
 ```
 
-Plugins load when a session starts, so start a new session after updating the plugin.
+Then start a new session and run `/rug:lift`.
+
+**Getting updates:** run `claude plugin update rug@undertherug`, or turn on auto-update
+for the `undertherug` marketplace in `/plugin` so you get fixes automatically.
+
+**For development:** load a local copy for one session with
+`claude --plugin-dir path/to/undertherug`.
 
 ## Usage
 
@@ -145,11 +150,12 @@ ever reaching the real code. If the except block didn't run, the finding goes un
 ## Plugin layout
 
 ```
-.claude-plugin/plugin.json   plugin name and description
-skills/lift/SKILL.md         the /rug:lift command
-agents/fallback-auditor.md   the helper agent that writes and runs the tests
-scripts/line_check.py        confirms a test really ran the except block
-examples/pricing.py          a small file with two planted rugs to try it on
+.claude-plugin/plugin.json        plugin name and description
+.claude-plugin/marketplace.json   lets people install it with /plugin install
+skills/lift/SKILL.md              the /rug:lift command
+agents/fallback-auditor.md        the helper agent that writes and runs the tests
+scripts/line_check.py             confirms a test really ran the except block
+examples/pricing.py               a small file with two planted rugs to try it on
 ```
 
 Check the plugin with `claude plugin validate .`

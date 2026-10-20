@@ -1,5 +1,10 @@
 {
   "name": "rug",
-  "version": "0.1.0",
-  "description": "Finds silent fallbacks in Python code, triggers each one with a throwaway test, and warns you what it would hide. Fixes only when you ask."
+  "displayName": "Under the Rug",
+  "description": "Finds Python code that quietly hides errors, triggers each one to prove what it hides, and fixes only when you ask.",
+  "author": {
+    "name": "Reuben"
+  },
+  "homepage": "https://github.com/reubenjrouse/undertherug",
+  "repository": "https://github.com/reubenjrouse/undertherug"
 }
