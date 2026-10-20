@@ -1,0 +1,12 @@
+# Personal notes, not part of the plugin
+.vibe-wise/
+plan.md
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OS
+Thumbs.db
+.DS_Store
