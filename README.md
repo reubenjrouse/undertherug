@@ -118,16 +118,15 @@ After the report:
 
 - `fix #3`: fix that one problem. Your own code's errors get raised; outside failures
   (network, AI services) get logged instead of hidden.
-- `test next 20`: test the next batch.
+- `test next 10`: test the next 10 by score.
 
 ## Good to know
 
 - **It's careful with your project.** Tests run in a temp folder, outside your code.
   They only fake the outside world (network, files), never your own code, and every
   finding lists what was faked.
-- **It asks before big jobs.** Testing costs time and tokens, so if it finds more than
-  20 candidates it shows you the top 20 and asks first. A small file takes a minute or
-  two.
+- **It spends where it matters.** Finding candidates is a plain script (free). A small,
+  cheap model scores each one, and only the 10 most dangerous get tested.
 - **It needs your project's Python.** It uses your active virtualenv or a `.venv` /
   `venv` folder, and asks you if it can't find one.
 
@@ -136,9 +135,12 @@ After the report:
 ```
 /rug:lift <target>
    ├─ 1. Pick files       path, description, everything, or recent Git changes
-   ├─ 2. Quick search     find every except block and default value (no testing yet)
-   ├─ 3. Rank and ask     riskiest first; more than 20 → asks before testing
-   ├─ 4. Lift each rug    helper agents write and run a test that triggers each one
+   ├─ 2. Scan             a script finds every except block and default value,
+   │                      with a short snippet of each and the code that calls it
+   ├─ 3. Score            a small model scores each 0–100: "does a failure turn into
+   │                      a believable wrong answer?" (skipped for 10 or fewer)
+   ├─ 4. Lift each rug    helper agents test the top 10: each test makes it fail on
+   │                      purpose (network failures hit a local server that fails instantly)
    ├─ 5. Line check       a fixed script confirms the test really ran that except block
    └─ 6. Report           worst first: when, what happens, consequence, proof
 ```
@@ -153,7 +155,10 @@ ever reaching the real code. If the except block didn't run, the finding goes un
 .claude-plugin/plugin.json        plugin name and description
 .claude-plugin/marketplace.json   lets people install it with /plugin install
 skills/lift/SKILL.md              the /rug:lift command
+agents/rug-scorer.md              the small model that scores each candidate
 agents/fallback-auditor.md        the helper agent that writes and runs the tests
+scripts/scan.py                   finds candidates and cuts out snippets
+scripts/fail_server.py            a local server that fails instantly, for network tests
 scripts/line_check.py             confirms a test really ran the except block
 examples/pricing.py               a small file with two planted rugs to try it on
 ```

@@ -8,50 +8,28 @@ disable-model-invocation: true
 
 Target: $ARGUMENTS
 
-Python only. Finding fallbacks is cheap; testing them is expensive. Do the cheap search
-yourself, and spend the auditor's work only on what the user agreed to test.
+Python only. Finding fallbacks is free (a script), scoring them is cheap (small
+scorer agents), testing them is expensive (auditors). Spend the expensive part only on
+the ones that score highest.
 
-Leave running the project's code to the auditors. If you must run Python yourself, run
-it with `-B` from outside the project, so no `__pycache__` is written into it.
+Leave running the project's code to the auditors. Don't read the scan's batch files
+yourself; the scorers do. Run scripts with `-B` so no `__pycache__` is written.
 
 ## 1. Work out which files to audit
 
 - **A path** (file or folder): use its `.py` files.
 - **A description** ("the payments part", "the API layer"): search the codebase for
   matching `.py` files. List the files you chose so the user can see the pick.
-- **"everything"** or similar: all `.py` files in the project, skipping virtualenvs,
-  `site-packages`, and build output.
-- **Empty**: audit recent changes. If this is a Git repository, use the lines changed
-  since the last commit (`git diff HEAD -U0 -- '*.py'`) plus new untracked `.py` files
-  (`git ls-files --others --exclude-standard -- '*.py'`), and only keep fallbacks on
-  those lines. If nothing has changed, say so and stop. If it is not a Git
-  repository, ask the user what to audit and stop until they answer.
+- **"everything"** or similar: the whole project (step 3 uses `--all`).
+- **Empty**: audit recent changes. If this is a Git repository, use the files and lines
+  changed since the last commit (`git diff HEAD -U0 -- '*.py'`) plus new untracked
+  `.py` files (`git ls-files --others --exclude-standard -- '*.py'`). If nothing has
+  changed, say so and stop. If it is not a Git repository, ask the user what to audit
+  and stop until they answer.
 
 If no `.py` files match, say so and stop.
 
-## 2. Cheap search
-
-Use Grep over the chosen files (with a few lines of context) to find candidates:
-- `except` clauses
-- `.get(key, default)` and `getattr(obj, name, default)` with a default
-
-Drop handlers whose body re-raises (`raise`). Rank what's left, riskiest first:
-1. A bare `except:` or `except Exception` / `BaseException` around the project's own
-   code or data
-2. Other handlers and defaults around the project's own code or data
-3. Handlers for failures from outside (network, file I/O on user-supplied paths, user
-   input, third-party APIs)
-
-## 3. Ask before big audits
-
-- **20 or fewer candidates:** go straight to step 4 with all of them.
-- **More than 20:** do not test yet. Show the total, how many files, and the top 20 by
-  rank as `file:line  function  (why it's risky)`. Then ask: test these 20, name a part
-  to focus on, or stop. Wait for the answer.
-
-Never test more than 20 candidates in one round.
-
-## 4. Find the project's Python
+## 2. Find the project's Python
 
 Trigger tests import the project's code, so they must run with the project's own
 Python, not the system one. Check in this order and use the first that exists:
@@ -60,20 +38,48 @@ Python, not the system one. Check in this order and use the first that exists:
 
 The interpreter is `Scripts\python.exe` inside the environment on Windows,
 `bin/python` elsewhere. If neither is found, ask the user which Python to use and
-wait. Never fall back to the system Python silently.
+wait. Never fall back to the system Python silently. `<python>` below means this one.
+
+## 3. Scan
+
+```bash
+<python> -B "${CLAUDE_PLUGIN_ROOT}/scripts/scan.py" --root <project root> <files...>
+```
+
+- "everything": use `--all` instead of listing files.
+- Recent changes: list the changed files, and add `--lines <file>:<a>-<b>` for each
+  changed hunk (from the `@@ ... +a,count @@` headers; `b = a + count - 1`). For each
+  new untracked file, add `--lines <file>:1-999999` so the whole file counts.
+
+It prints a short JSON summary: how many candidates, the batch files (25 candidates
+each), and the index file. If it lists `unreadable` files, tell the user which ones
+and why. If `candidates` is 0, say no fallbacks were found and stop.
+
+## 4. Score
+
+- **10 or fewer candidates:** skip scoring and test all of them.
+- **More than 10:** launch `rug:rug-scorer` agents, each with up to 2 batch file paths,
+  **at most 6 in the same message** (send the next 6 when they finish). Each returns
+  `{id, score, reason}` for every candidate in its batches.
+
+Check every candidate id from the index came back exactly once. If a batch's ids are
+missing, send that batch to one scorer again. If they are still missing, list those
+candidates as "not scored" in the report; never drop them silently.
+
+Sort by score, highest first. Pick the **top 10 with a score of 20 or more**. Don't ask
+the user first; testing 10 is the default.
 
 ## 5. Run the auditors in parallel
 
-Split the approved candidates into groups so several auditors can work at once:
+Split the picked candidates into groups so several auditors can work at once:
 - Keep candidates from the same file in the same group, so each file is read once.
-- Aim for about 4 candidates per group, and at most 5 groups. Merge small files into
-  one group; split a file with many candidates across groups.
+- Aim for about 4 candidates per group, and at most 5 groups.
 
-Launch one `rug:fallback-auditor` subagent per group, **all in the same message**
-so they run at the same time, and wait for every one to finish before reporting. Give
-each one the project root's absolute path, the Python interpreter's absolute path, and
-its group of candidates (file:line and function for each; for `except` candidates,
-the line of the `except` clause).
+Launch one `rug:fallback-auditor` subagent per group, **all in the same message**,
+and wait for every one to finish before reporting. Give each one the project root's
+absolute path, the Python interpreter's absolute path, the plugin's scripts folder
+(`${CLAUDE_PLUGIN_ROOT}/scripts`), and its candidates (file:line, function, and the
+scorer's reason; for `except` candidates, the line of the `except` clause).
 
 When all have returned, merge their findings. Auditors can't see each other's work, so
 check consistency across all of them: findings with the same failure pattern must be
@@ -100,7 +106,7 @@ Python: `C:\...\.venv\Scripts\python.exe`
    What happens: it returns None, and nothing is logged.
    Consequence: nothing in the project calls it yet, so no effect today. A future
      caller would get None with no reason why.
-   Proof: ran it · line check: ran · faked: nothing (closed local port)
+   Proof: ran it · line check: ran · faked: the rate service (local server that fails instantly)
 
 Not a problem: none
 Couldn't prove: none
@@ -115,6 +121,8 @@ Rules for the report:
   following the value to where it ends up (who calls it, what the user sees).
 - If the consequence was worked out by reading code instead of running it, say so:
   `Consequence (from reading the code): ...`.
+- If candidates were scored, add `Score: <n> (<reason>)` under each problem's header
+  line, so the user can see why it was picked.
 - Each problem cites its proof: the line check and what was faked. If the auditor could
   not trigger a fallback, or the line check says the test never reached it, list it
   under `Couldn't prove` with the reason, instead of guessing what it does.
@@ -123,10 +131,12 @@ Rules for the report:
 - Put the most serious problems first: wrong data or money before a failure reported
   as success, before missing output, before slower or worse results, before cosmetic.
 - Put the Python path in backticks, so the terminal doesn't swallow backslashes.
-- If candidates were left untested, add: `<M> more found, not tested. Say "test next 20" to continue.`
+- If scored candidates were left untested, add:
+  `<M> more scored 20 or above, not tested. Say "test next 10" to continue.`
+  and, if any scored under 20: `<K> scored under 20 and were skipped (likely fine).`
 - End with: `Say "fix #N" to fix one. Nothing has been changed.`
 
-"test next 20" runs steps 5–6 on the next 20 by rank, continuing the numbering.
+"test next 10" runs steps 5–6 on the next 10 by score, continuing the numbering.
 
 ## 7. Fixes, only on request
 
