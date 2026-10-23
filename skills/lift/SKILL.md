@@ -1,6 +1,6 @@
 ---
 description: Audit silent fallbacks (try/except, defaults, swallowed errors) in Python code and warn what each one hides.
-argument-hint: [file, folder, part of the codebase, "branch", or "everything"]
+argument-hint: [file, folder, part of the codebase, or "everything"]
 disable-model-invocation: true
 ---
 
@@ -23,16 +23,16 @@ yourself; the scorers do. Run scripts with `-B` so no `__pycache__` is written.
 - **"everything"** or similar: the whole project (step 3 uses `--all`).
 - **Empty**: audit uncommitted changes. If this is a Git repository, use the files and
   lines changed since the last commit (`git diff HEAD -U0 -- '*.py'`) plus new untracked
-  `.py` files (`git ls-files --others --exclude-standard -- '*.py'`). If nothing has
-  changed, check whether the branch has commits ahead of its base (as in "branch"
-  below); if it does, say so and suggest `/rug:lift branch`, then stop. If it is not a
-  Git repository, ask the user what to audit and stop until they answer.
-- **"branch"**, or **"branch <ref>"**: audit everything this branch changed, committed or
-  not. The base is `<ref>` if given, else the first of `upstream/main`, `origin/main`,
-  `main`, `upstream/master`, `origin/master`, `master` that exists
-  (`git rev-parse --verify --quiet <ref>`). Use `git merge-base <base> HEAD`, then the
-  files and lines from `git diff <merge-base> -U0 -- '*.py'` plus new untracked `.py`
-  files. Say which base you used. If no base exists, ask the user for one.
+  `.py` files (`git ls-files --others --exclude-standard -- '*.py'`). If it is not a Git
+  repository, ask the user what to audit and stop until they answer.
+
+  If nothing is uncommitted, the work may already be committed. Don't guess where it
+  started; ask: `Everything's committed. Check the changes since which branch?
+  (for example main)` and wait. When they name one, check it exists
+  (`git rev-parse --verify --quiet <branch>`), then use the files and lines from
+  `git diff $(git merge-base <branch> HEAD) -U0 -- '*.py'` plus new untracked `.py`
+  files. That's only what changed since this branch split off from theirs, committed or
+  not. If the branch doesn't exist, say so and ask again.
 
 If no `.py` files match, say so and stop.
 
@@ -67,7 +67,7 @@ passed.
 ```
 
 - "everything": use `--all` instead of listing files.
-- Uncommitted or branch changes: list the changed files, and add `--lines <file>:<a>-<b>` for each
+- Uncommitted changes, or changes since a branch: list the changed files, and add `--lines <file>:<a>-<b>` for each
   changed hunk (from the `@@ ... +a,count @@` headers; `b = a + count - 1`). For each
   new untracked file, add `--lines <file>:1-999999` so the whole file counts.
 
@@ -165,13 +165,62 @@ Rules for the report:
 
 ## 7. Fixes, only on request
 
-Do not edit any code until the user asks for a specific fix. When they do:
-- Change only that fallback. Never delete files.
-- If the failure comes from the project's own code or data: remove the fallback so the
-  error surfaces, or raise a clear error that names the missing thing.
-- If it comes from outside (network, AI services, third-party APIs, user input): keep
-  handling the failure, but make it log or surface the problem instead of staying
-  silent or reporting success.
-- If it catches both (a broad `except` around an outside call that can also hide the
-  project's own bugs): narrow it to the outside errors, and log those.
-- Show the exact before/after of what changed.
+Do not edit any code until the user asks for a specific fix. Keep each problem's
+trigger test path from the auditor's findings; the fix check below re-runs it.
+
+### 7a. Ask how to fix it
+
+Only the owner knows whether the fallback was intended, so ask first. Offer 2-3
+options, recommend one with a short reason, and let them describe their own:
+
+```
+Fix #1 pricing.py:13 get_price: how should it handle a missing product?
+  1. Raise an error naming the product  (recommended: a missing price is a bug)
+  2. Log a warning and still return 0
+  3. Leave it: 0 is intended (adds a comment saying so)
+  Or describe your own.
+```
+
+Base the recommendation on where the failure comes from:
+- The project's own code or data: remove the fallback so the error surfaces, or raise
+  a clear error that names the missing thing.
+- Outside (network, AI services, third-party APIs, user input): keep handling the
+  failure, but log it or surface it instead of staying silent or reporting success.
+- Both (a broad `except` around an outside call that can also hide the project's own
+  bugs): narrow it to the outside errors, and log those.
+
+Wait for the answer.
+
+### 7b. Fix it
+
+Make the change they chose, and only that change. Never delete files.
+
+### 7c. Check the fix didn't sweep anything new under the rug
+
+1. Re-run that problem's trigger test, for an `except` through the line check as the
+   auditor did:
+   `<python> -B "${CLAUDE_PLUGIN_ROOT}/scripts/line_check.py" --file <file> --line <except line> <test>`
+   (for other candidates, `<python> -B <test>`). The behavior must now match their
+   choice: for example, it raises, or it logs. If the except line moved or was removed,
+   use the new line, or run the test directly. If the test file no longer exists, say
+   you couldn't re-run it; never report the check as passed.
+2. Scan only the lines you changed:
+   `<python> -B "${CLAUDE_PLUGIN_ROOT}/scripts/scan.py" --root <project root> --lines <file>:<a>-<b> <file>`
+   Any candidate there, other than the original fallback when the user chose to keep
+   it, is a new hiding spot.
+
+### 7d. Report
+
+Show the exact before/after of the code, then the check:
+
+```
+Fixed #1 pricing.py:13 get_price
+  Before: get_price('bananna') -> 0, nothing logged
+  After:  get_price('bananna') -> KeyError: 'bananna'   (line check: ran)
+  New hiding spots in the fix: none
+```
+
+Say it's done only if both checks pass. If one fails, say exactly what's wrong (the
+test still returns 0, or the fix added a new hiding spot at a line) and offer to try
+again. Never undo the user's code on your own. If the project has tests for that file,
+suggest the command to run them; don't run the whole test suite yourself.

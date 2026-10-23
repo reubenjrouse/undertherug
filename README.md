@@ -48,6 +48,8 @@ Run `/rug:lift` and it:
 3. **Tells you what was under it.** When it happens, what the code does instead of
    failing, and what that means for your app today.
 4. **Fixes only when you ask.** Nothing in your project changes until you say `fix #N`.
+   It asks how you want it fixed, then re-runs the test to prove the fix didn't just
+   move the rug.
 
 ### Example report
 
@@ -81,10 +83,10 @@ Say "fix #N" to fix one. Nothing has been changed.
 
 ## When to use it
 
-- **Before you open a PR.** Run `/rug:lift branch` and it checks everything your branch
-  changed, committed or not. A fix can sweep a new error under the rug too.
-- **While the AI is still working.** Run `/rug:lift` with no target and it checks only
-  what changed since your last commit.
+- **While the AI is working, or before you open a PR.** Run `/rug:lift` with no target.
+  It checks what you haven't committed yet. If everything is committed, it asks which
+  branch you started from and checks only what changed since then. A fix can sweep a
+  new error under the rug too.
 - **When something "sometimes" comes out empty or wrong** and there's no error to go on.
 - **On a codebase you didn't write yourself**, to find out where the errors are hidden.
 
@@ -112,16 +114,16 @@ for the `undertherug` marketplace in `/plugin` so you get fixes automatically.
 
 | Command | What it checks |
 |---|---|
-| `/rug:lift` | Only lines changed since your last Git commit |
-| `/rug:lift branch` | Everything this branch changed vs `main` (or `/rug:lift branch develop`) |
+| `/rug:lift` | Lines you haven't committed yet (if none, it asks which branch to compare with) |
 | `/rug:lift app/pricing.py` | One file, or every `.py` file in a folder |
 | `/rug:lift the payments code` | Files that match the description (it shows you which) |
 | `/rug:lift everything` | The whole project, skipping virtualenvs and build output |
 
 After the report:
 
-- `fix #3`: fix that one problem. Your own code's errors get raised; outside failures
-  (network, AI services) get logged instead of hidden.
+- `fix #3`: fix that one problem. It offers a few ways to fix it (and recommends one),
+  makes the change you pick, then re-runs the test and checks the fix didn't add a new
+  hiding spot before calling it done.
 - `test next 10`: test the next 10 by score.
 
 ## Good to know
