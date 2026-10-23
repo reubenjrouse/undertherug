@@ -5,14 +5,16 @@ Usage:
     python -B scan.py --root <project root> --all
 
 Finds:
-    - except blocks whose body doesn't raise
-    - .get(key, default) and getattr(obj, name, default) calls
+    - except blocks that don't always raise (a raise only inside an `if` still counts)
+    - `with suppress(...)` / `with contextlib.suppress(...)` blocks
+    - .get(key, default), getattr(obj, name, default) and os.getenv(name, default) calls
 
 For each candidate it keeps the try/except (or the line around the call) and up to
 three places that call the enclosing function, so a scorer can judge it without
 reading whole files. Callers are found by parsing every project file (skipping
 virtualenvs and build output); files that can't be parsed for that are listed under
-"callers_not_searched".
+"callers_not_searched", except template files with {{placeholders}}, which are only
+counted under "template_files_skipped".
 
 Writes the candidates to a new temp directory, split into batch files of 25, and
 prints a short JSON summary with the directory and batch paths. Files that can't be
@@ -82,6 +84,29 @@ def except_snippet(handler, try_node, func, lines):
     return "\n".join(parts)
 
 
+def call_name(call):
+    f = call.func
+    return f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
+
+
+def is_suppress(expr):
+    """`suppress(...)` or `contextlib.suppress(...)`: swallows the listed errors."""
+    return isinstance(expr, ast.Call) and call_name(expr) == "suppress"
+
+
+def with_snippet(node, func, lines):
+    parts = []
+    if func is not None:
+        parts.append(numbered([lines[func.lineno - 1]], func.lineno))
+        if node.lineno - func.lineno > 1:
+            parts.append("       ...")
+    parts.append(numbered(clip(lines, node.lineno, node.end_lineno, MAX_TRY_LINES), node.lineno))
+    end = min(len(lines), node.end_lineno + 3)
+    if end > node.end_lineno:
+        parts.append(numbered(lines[node.end_lineno:end], node.end_lineno + 1))
+    return "\n".join(parts)
+
+
 def call_snippet(call, func, lines):
     start = max(1, call.lineno - 3)
     end = min(len(lines), call.end_lineno + 3)
@@ -92,6 +117,11 @@ def call_snippet(call, func, lines):
             parts.append("       ...")
     parts.append(numbered(lines[start - 1:end], start))
     return "\n".join(parts)
+
+
+def is_template(path):
+    """A .py file with {{placeholders}} that a project generator fills in, not real Python."""
+    return "{{" in read_source(path)
 
 
 def is_test_file(rel_path):
@@ -119,6 +149,7 @@ class CallerIndex:
         self.calls = None   # name -> [(path, line)]
         self.lines = {}     # path -> source lines
         self.unreadable = []
+        self.templates = 0  # .py files with {{placeholders}}, e.g. project templates
 
     def load(self):
         self.calls = {}
@@ -127,13 +158,15 @@ class CallerIndex:
                 source = read_source(path)
                 tree = ast.parse(source, filename=path)
             except (OSError, UnicodeDecodeError, SyntaxError, ValueError) as e:
-                self.unreadable.append({"file": os.path.relpath(path, self.root), "error": f"{type(e).__name__}: {e}"})
+                if isinstance(e, SyntaxError) and is_template(path):
+                    self.templates += 1
+                else:
+                    self.unreadable.append({"file": os.path.relpath(path, self.root), "error": f"{type(e).__name__}: {e}"})
                 continue
             self.lines[path] = source.splitlines()
             for node in ast.walk(tree):
                 if isinstance(node, ast.Call):
-                    f = node.func
-                    name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
+                    name = call_name(node)
                     if name:
                         self.calls.setdefault(name, []).append((path, node.lineno))
 
@@ -183,14 +216,21 @@ def scan_file(path, root, callers, ranges):
 
     for node in ast.walk(tree):
         if isinstance(node, ast.ExceptHandler):
-            if any(isinstance(n, ast.Raise) for stmt in node.body for n in ast.walk(stmt)):
+            # Skip only handlers that always raise. A raise inside an `if` means some
+            # paths still swallow the error, so those stay candidates.
+            if any(isinstance(stmt, ast.Raise) for stmt in node.body):
                 continue
             span = (node.lineno, node.end_lineno)
             kind = "except " + (ast.unparse(node.type) if node.type is not None else "(bare)")
             snippet = except_snippet(node, parents[node], enclosing(node, parents, funcs), lines)
+        elif isinstance(node, (ast.With, ast.AsyncWith)) and any(is_suppress(item.context_expr) for item in node.items):
+            span = (node.lineno, node.end_lineno)
+            kind = "with " + ast.unparse(next(i.context_expr for i in node.items if is_suppress(i.context_expr)))[:80]
+            snippet = with_snippet(node, enclosing(node, parents, funcs), lines)
         elif isinstance(node, ast.Call) and (
             (isinstance(node.func, ast.Attribute) and node.func.attr == "get" and len(node.args) == 2)
             or (isinstance(node.func, ast.Name) and node.func.id == "getattr" and len(node.args) == 3)
+            or (call_name(node) == "getenv" and len(node.args) == 2)
         ):
             span = (node.lineno, node.end_lineno)
             kind = "default: " + ast.unparse(node)[:80]
@@ -229,13 +269,16 @@ def main():
         args.files = sorted(project_files(root))
     ranges = parse_ranges(args.lines, root) if args.lines else None
     callers = CallerIndex(root)
-    candidates, unreadable = [], []
+    candidates, unreadable, templates = [], [], set()
 
     for path in args.files:
         try:
             candidates.extend(scan_file(os.path.abspath(path), root, callers, ranges))
         except (OSError, UnicodeDecodeError, SyntaxError, ValueError) as e:
-            unreadable.append({"file": path, "error": f"{type(e).__name__}: {e}"})
+            if isinstance(e, SyntaxError) and is_template(path):
+                templates.add(os.path.normcase(os.path.abspath(path)))
+            else:
+                unreadable.append({"file": path, "error": f"{type(e).__name__}: {e}"})
 
     candidates.sort(key=lambda c: (c["file"], c["line"]))
     for i, c in enumerate(candidates, 1):
@@ -253,13 +296,14 @@ def main():
         json.dump([{k: c[k] for k in ("id", "file", "line", "function", "kind")} for c in candidates], f, indent=1)
 
     print(json.dumps({
-        "files_scanned": len(args.files) - len(unreadable),
+        "files_scanned": len(args.files) - len(unreadable) - len(templates),
         "candidates": len(candidates),
         "out_dir": out_dir,
         "index": index_path,
         "batches": batches,
         "unreadable": unreadable,
         "callers_not_searched": callers.unreadable,
+        "template_files_skipped": max(len(templates), callers.templates),
     }, indent=1))
 
 

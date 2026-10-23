@@ -40,8 +40,9 @@ This isn't rare. From a [Claude Code bug report](https://github.com/anthropics/c
 
 Run `/rug:lift` and it:
 
-1. **Finds the rugs.** Every `try/except` that carries on, and every default value
-   (`.get(key, default)`) that could hide missing data.
+1. **Finds the rugs.** Every `try/except` that carries on, every `with suppress(...)`,
+   and every default value (`.get(key, default)`, `os.getenv(name, default)`) that could
+   hide missing data.
 2. **Lifts them.** For each one, it writes a throwaway test that makes it fail on
    purpose, and checks the test really reached that line.
 3. **Tells you what was under it.** When it happens, what the code does instead of
@@ -80,8 +81,10 @@ Say "fix #N" to fix one. Nothing has been changed.
 
 ## When to use it
 
-- **After the AI builds a feature**, before you ship it. Run `/rug:lift` with no target
-  and it checks only what changed since your last commit.
+- **Before you open a PR.** Run `/rug:lift branch` and it checks everything your branch
+  changed, committed or not. A fix can sweep a new error under the rug too.
+- **While the AI is still working.** Run `/rug:lift` with no target and it checks only
+  what changed since your last commit.
 - **When something "sometimes" comes out empty or wrong** and there's no error to go on.
 - **On a codebase you didn't write yourself**, to find out where the errors are hidden.
 
@@ -110,6 +113,7 @@ for the `undertherug` marketplace in `/plugin` so you get fixes automatically.
 | Command | What it checks |
 |---|---|
 | `/rug:lift` | Only lines changed since your last Git commit |
+| `/rug:lift branch` | Everything this branch changed vs `main` (or `/rug:lift branch develop`) |
 | `/rug:lift app/pricing.py` | One file, or every `.py` file in a folder |
 | `/rug:lift the payments code` | Files that match the description (it shows you which) |
 | `/rug:lift everything` | The whole project, skipping virtualenvs and build output |
@@ -127,8 +131,9 @@ After the report:
   finding lists what was faked.
 - **It spends where it matters.** Finding candidates is a plain script (free). A small,
   cheap model scores each one, and only the 10 most dangerous get tested.
-- **It needs your project's Python.** It uses your active virtualenv or a `.venv` /
-  `venv` folder, and asks you if it can't find one.
+- **It needs your project's Python.** It tries the project's `.venv` / `venv`, then your
+  active virtualenv or conda environment, and only uses one that exists and can import
+  your project. If none can, it tells you what it tried and asks.
 
 ## How it works
 

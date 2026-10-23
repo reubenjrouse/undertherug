@@ -1,6 +1,6 @@
 ---
 description: Audit silent fallbacks (try/except, defaults, swallowed errors) in Python code and warn what each one hides.
-argument-hint: [file, folder, part of the codebase, or "everything"]
+argument-hint: [file, folder, part of the codebase, "branch", or "everything"]
 disable-model-invocation: true
 ---
 
@@ -21,24 +21,44 @@ yourself; the scorers do. Run scripts with `-B` so no `__pycache__` is written.
 - **A description** ("the payments part", "the API layer"): search the codebase for
   matching `.py` files. List the files you chose so the user can see the pick.
 - **"everything"** or similar: the whole project (step 3 uses `--all`).
-- **Empty**: audit recent changes. If this is a Git repository, use the files and lines
-  changed since the last commit (`git diff HEAD -U0 -- '*.py'`) plus new untracked
+- **Empty**: audit uncommitted changes. If this is a Git repository, use the files and
+  lines changed since the last commit (`git diff HEAD -U0 -- '*.py'`) plus new untracked
   `.py` files (`git ls-files --others --exclude-standard -- '*.py'`). If nothing has
-  changed, say so and stop. If it is not a Git repository, ask the user what to audit
-  and stop until they answer.
+  changed, check whether the branch has commits ahead of its base (as in "branch"
+  below); if it does, say so and suggest `/rug:lift branch`, then stop. If it is not a
+  Git repository, ask the user what to audit and stop until they answer.
+- **"branch"**, or **"branch <ref>"**: audit everything this branch changed, committed or
+  not. The base is `<ref>` if given, else the first of `upstream/main`, `origin/main`,
+  `main`, `upstream/master`, `origin/master`, `master` that exists
+  (`git rev-parse --verify --quiet <ref>`). Use `git merge-base <base> HEAD`, then the
+  files and lines from `git diff <merge-base> -U0 -- '*.py'` plus new untracked `.py`
+  files. Say which base you used. If no base exists, ask the user for one.
 
 If no `.py` files match, say so and stop.
 
 ## 2. Find the project's Python
 
 Trigger tests import the project's code, so they must run with the project's own
-Python, not the system one. Check in this order and use the first that exists:
-1. An activated environment: the `VIRTUAL_ENV` environment variable.
-2. A `.venv` or `venv` folder at the project root.
+Python, not the system one. Try these in order:
+1. A `.venv` or `venv` folder at the project root.
+2. An activated virtualenv: the `VIRTUAL_ENV` environment variable.
+3. An activated conda environment: the `CONDA_PREFIX` environment variable.
 
-The interpreter is `Scripts\python.exe` inside the environment on Windows,
-`bin/python` elsewhere. If neither is found, ask the user which Python to use and
-wait. Never fall back to the system Python silently. `<python>` below means this one.
+Where the interpreter is inside an environment:
+- virtualenv: `Scripts\python.exe` on Windows, `bin/python` elsewhere
+- conda: `python.exe` at the environment's root on Windows, `bin/python` elsewhere
+
+Accept a candidate only if **both** checks pass, run from the project root:
+- the file exists, and
+- it can import the project: `<candidate> -B -c "import <package>"`, where `<package>`
+  is the top-level package of the audited files (the first folder in their path that
+  has an `__init__.py`, e.g. `gradio` for `gradio/workflow.py`; for a `src/` layout,
+  the folder under `src/`). Skip this check only if the files aren't in a package.
+
+If a candidate fails, try the next. If none passes, tell the user what you tried and
+why each failed, and ask which Python to use. Never use one that failed a check, and
+never fall back to the system Python silently. `<python>` below means the one that
+passed.
 
 ## 3. Scan
 
@@ -47,13 +67,15 @@ wait. Never fall back to the system Python silently. `<python>` below means this
 ```
 
 - "everything": use `--all` instead of listing files.
-- Recent changes: list the changed files, and add `--lines <file>:<a>-<b>` for each
+- Uncommitted or branch changes: list the changed files, and add `--lines <file>:<a>-<b>` for each
   changed hunk (from the `@@ ... +a,count @@` headers; `b = a + count - 1`). For each
   new untracked file, add `--lines <file>:1-999999` so the whole file counts.
 
 It prints a short JSON summary: how many candidates, the batch files (25 candidates
-each), and the index file. If it lists `unreadable` files, tell the user which ones
-and why. If `candidates` is 0, say no fallbacks were found and stop.
+each), and the index file. If it lists `unreadable` or `callers_not_searched` files,
+tell the user which ones and why. If `template_files_skipped` is above 0, mention it in
+one line (`5 template files skipped`); don't list them. If `candidates` is 0, say no
+fallbacks were found and stop.
 
 ## 4. Score
 
@@ -77,8 +99,8 @@ Split the picked candidates into groups so several auditors can work at once:
 
 Launch one `rug:fallback-auditor` subagent per group, **all in the same message**,
 and wait for every one to finish before reporting. Give each one the project root's
-absolute path, the Python interpreter's absolute path, the plugin's scripts folder
-(`${CLAUDE_PLUGIN_ROOT}/scripts`), and its candidates (file:line, function, and the
+absolute path, the Python interpreter's absolute path, the plugin's scripts folder as
+an absolute path (`${CLAUDE_PLUGIN_ROOT}/scripts`, expanded), and its candidates (file:line, function, and the
 scorer's reason; for `except` candidates, the line of the `except` clause).
 
 When all have returned, merge their findings. Auditors can't see each other's work, so
@@ -122,7 +144,10 @@ Rules for the report:
 - If the consequence was worked out by reading code instead of running it, say so:
   `Consequence (from reading the code): ...`.
 - If candidates were scored, add `Score: <n> (<reason>)` under each problem's header
-  line, so the user can see why it was picked.
+  line, so the user can see why it was picked. Scores come from a short snippet, so
+  they decide what gets tested, not how serious a problem is; order problems by what
+  the tests showed (below), not by score. Say this once, on the line after the
+  `Python:` line: `Scores pick what to test; they don't rank how serious it is.`
 - Each problem cites its proof: the line check and what was faked. If the auditor could
   not trigger a fallback, or the line check says the test never reached it, list it
   under `Couldn't prove` with the reason, instead of guessing what it does.

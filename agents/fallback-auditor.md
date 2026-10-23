@@ -30,10 +30,13 @@ user's project.
 You receive a list of candidates (file:line, function). Test only those; do not search
 for more. Read each one and confirm it hides a failure and carries on:
 - an `except` block that returns a default, `pass`es, `continue`s, or only logs at
-  debug level
-- `.get(key, default)` / `getattr(obj, name, default)` on data that should exist
+  debug level (if it raises only on some paths, test a path that doesn't raise)
+- a `with suppress(...)` block, which swallows the listed errors
+- `.get(key, default)` / `getattr(obj, name, default)` / `os.getenv(name, default)` on
+  data that should exist
 
-If a candidate re-raises, or logs and then raises, return it as "not a problem" with the reason.
+If a candidate always re-raises, or logs and then raises, return it as "not a problem"
+with the reason.
 
 ## 2. Note where the failure comes from
 
@@ -47,7 +50,8 @@ originates, not by which file the handler is in.
 ## 3. Trigger each fallback
 
 You are given the project's Python interpreter path; call it `<python>` below. Use
-it for every command, never plain `python`. Create a temp directory once:
+it for every command, never plain `python`. You are also given the plugin's scripts
+folder as an absolute path; call it `<scripts>` below. Create a temp directory once:
 
 ```bash
 <python> -c "import tempfile; print(tempfile.mkdtemp(prefix='rug-'))"
@@ -61,11 +65,11 @@ For each fallback, write a small test script there that:
    immediately (waiting is part of the outside world, so this is allowed),
 4. calls the code and prints what came back and whether anything was logged or raised.
 
-For a network or HTTP failure, use the failing server from the plugin's scripts folder
-(you are given its path). It fails instantly:
+For a network or HTTP failure, use the failing server from `<scripts>`. It fails
+instantly:
 
 ```python
-sys.path.insert(0, r"<plugin scripts folder>")
+sys.path.insert(0, r"<scripts>")
 from fail_server import failing_server
 
 with failing_server("500") as url:   # or "reset" (connection dropped) or "bad_json"
@@ -82,7 +86,7 @@ also run it directly: the checker prints the test's own output too. `<except lin
 the line of the `except` clause itself:
 
 ```bash
-<python> -B "${CLAUDE_PLUGIN_ROOT}/scripts/line_check.py" --file <source file> --line <except line> <test script>
+<python> -B "<scripts>/line_check.py" --file <source file> --line <except line> <test script>
 ```
 
 `-B` stops Python writing `__pycache__` into the project. The checker prints the test's
@@ -93,8 +97,9 @@ output, then a final `RUG LINE CHECK: {...}` line:
 - `"test_error"` set: the test crashed; read it, fix the test, retry.
 - exit code 2: wrong line number; re-read the file and use the `except` clause line.
 
-For `.get(...)` / `getattr(...)` candidates, run the test with `<python> -B <script>` and
-mark the evidence `line check: not applicable`.
+For every other candidate (`with suppress(...)`, `.get(...)`, `getattr(...)`,
+`os.getenv(...)`), run the test with `<python> -B <script>` and mark the evidence
+`line check: not applicable`.
 
 Never write your own tracing; always use the checker.
 
